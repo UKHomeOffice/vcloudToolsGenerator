@@ -1,4 +1,4 @@
-10.10.20.1/28:
+10.10.20.1/28: # would probably use the name here instead, but cluster_config needs to be fixed to support that
     name: 'example network'
     vdc: 'EXAMPLE_VDC'
     edge: 'nft0000000'
