@@ -1,5 +1,5 @@
 # vcloudToolsGenerator
-An attempt at abstracting the vcloud-tools format to quickly generate and launch a cluster.  has some coreos/kubernetes stuff in here, but you don't need to be using that for this to be useful.
+An attempt at abstracting the vcloud-tools format to quickly generate and launch a cluster.  Has some coreos/kubernetes stuff in here, but you don't need to be using that for this to be useful.
 
 what works.
 ==
