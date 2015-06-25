@@ -3,11 +3,14 @@ An attempt at abstracting the vcloud-tools format to quickly generate and launch
 
 what works.
 ==
-=vapps
-=networks
+- vapps
+- networks
+- uploading iso's
+- lanching everything (assuming you don't need nat, firewall or vpn rules first)
 
 what doesn't work
 ==
-=vpn
-=edge
+- vpn
+- firewall
+- nat
 
