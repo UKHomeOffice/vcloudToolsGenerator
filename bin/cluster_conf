@@ -1,0 +1,149 @@
+#!/usr/bin/env ruby
+
+require 'erb'
+require 'yaml'
+require 'fileutils'
+require 'optionscrapper'
+
+module CloudConfig
+  class Render
+    def initialize(scope = {})
+      scope.each_pair do |k,v|
+        self.instance_variable_set("@#{k}", v)
+      end
+    end
+
+    def render(filename)
+      ERB.new(File.read(filename), nil, '-').result(binding)
+    end
+  end
+
+  class Run
+    def initialize
+      begin 
+        parser.parse!
+        # step: check the command options
+        usage "you have not specified a site" unless options[:project]
+        # step: call the command
+        send options[:command] if options[:command]
+      rescue OptionParser::MissingArgument, OptionParser::InvalidOption => e 
+        parser.usage e.message
+      rescue ArgumentError => e 
+        parser.usage e.message
+      end
+    end
+
+    private
+    def generate_cloudconfigs
+      # step: ensure the cluster.yml exists
+
+      # step: ensure the directories
+      FileUtils.mkdir_p(cloudconfig_generated_dir)    unless File.directory?(cloudconfig_generated_dir)
+      FileUtils.mkdir_p(cloudconfig_generate_iso_dir) unless File.directory?(cloudconfig_generate_iso_dir)
+      # step: generate the cloud configs
+      boxes do |hostname, box|
+        # step: generate the filename
+        filename = "#{cloudconfig_generated_dir}/#{hostname}.#{project_name}.cloudconfig"
+        # step: generate some scope
+        box['etcd2peerlist'] = project_config['boxes'].map { |x| "#{x['hostname']}=http://#{x['ipaddress']}:2380" }.join(',')
+        scoped   = scope.dup.merge(box)
+        # step: generate the scope for this config
+        cloudconfig = Render::new(scoped).render(options[:template])
+        FileUtils.mkdir_p(File.dirname(filename)) unless File.directory?(File.dirname(filename))
+        File.open(filename, "w") do |fd|
+          fd.write(cloudconfig)
+        end
+        verbose "Generated cloud config for host: #{hostname}, config: #{filename}"
+      end
+
+      # step: are we generating the iso as well?
+      generate_images if options[:make_iso]
+    end
+
+    def generate_images
+      boxes do |hostname, box|
+        # step: set the names
+        cfg = "#{cloudconfig_generated_dir}/#{hostname}.#{project_name}.cloudconfig"
+        iso = "#{cloudconfig_generate_iso_dir}/#{hostname}.#{project_name}.iso"
+        # step: move along if not there
+        next unless File.exist?(cfg)
+        # step: ensure the directory structure exists
+        FileUtils.mkdir_p(File.dirname(iso))
+        # step: generate the iso images
+        verbose "Generating the ISO images from config: #{cfg}, iso: #{iso}"
+        system("mkdir -p /tmp/new-drive/openstack/latest && cp #{cfg} /tmp/new-drive/openstack/latest/user_data && mkisofs -R -V config-2 -o #{iso} /tmp/new-drive >/dev/null 2>/dev/null && rm -rf /tmp/new-drive")
+      end
+    end
+
+    def project_name
+      File.basename(options[:project])
+    end
+
+    def project_config(project = options[:project])
+      @config ||= nil 
+      unless @config 
+        filename = "#{options[:project]}/cluster.yml"
+        validate_file(filename)
+        @config = YAML.load(File.open(filename))
+      end
+      @config
+    end
+
+    def cloudconfig_generated_dir
+      "#{options[:project]}/generated/cloudconfigs"
+    end
+
+    def cloudconfig_generate_iso_dir
+      "#{cloudconfig_generated_dir}/iso"
+    end  
+
+    def verbose(message)
+      puts "[v] #{message}" if message
+    end
+
+    def scope
+      @scope ||= (project_config['scope'] || {})
+    end
+
+    def boxes(&block)
+      (project_config['boxes'] || {}).each do |box|
+        yield box['hostname'], box 
+      end 
+    end
+
+    def validate_file(filename)
+      raise ArgumentError, "you have not specified a file to validate"    unless filename
+      raise ArgumentError, "the file: #{filename} does not exist"         unless File.exist?(filename)
+      raise ArgumentError, "the file: #{filename} is not a regular file"  unless File.file?(filename)
+      raise ArgumentError, "the file: #{filename} is not readable"        unless File.readable?(filename)
+      filename
+    end
+
+    def options
+      @options ||= {
+        :template => 'templates/cloudinit.coreos.erb',
+        :make_iso => false,
+        :verbose  => false,
+      }
+    end
+
+    def usage(message)
+      raise ArgumentError, message
+    end
+
+    def parser
+      @parser ||= OptionScrapper.new do |o|
+        o.banner = "Usage: #{__FILE__} -c CONFIG -t TEMPLATE -g PATH"
+        o.on('-p PROJECT', '--project PROJECT', 'the directory containing the cluster.yml') { |x| options[:project] = x }
+        o.command :cloud, "generate the site specific cloudinit config drives" do 
+          o.command_alias :cl
+          o.on('-t FILENAME', '--template FILENAME', "the location of the cloudinit template to use (defaults #{options[:template]})" ) { |x| options[:template] = x }
+          o.on('-i', '--isos', "generate the iso images from the cloudconfig as well (deaults: #{options[:make_iso]})") { options[:make_iso] = true } 
+          o.on_command { options[:command] = :generate_cloudconfigs }
+        end
+      end
+    end
+  end
+end
+
+CloudConfig::Run.new

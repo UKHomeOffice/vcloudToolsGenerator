@@ -1,0 +1,7 @@
+10.10.20.1/28:
+    name: 'example network'
+    vdc: 'EXAMPLE_VDC'
+    edge: 'nft0000000'
+    range:
+    - start_address: 10.10.10.2
+      end_address: 10.10.10.14

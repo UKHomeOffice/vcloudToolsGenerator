@@ -1,0 +1,34 @@
+scope:
+  domain: example.com
+  kubernetes_overlay_network: 1.1.0.0
+  kubernetes_overlay_prefix: 16
+  kubernetes_release: https://kubernetes_url
+  timezone: UTC
+  ssh_keys:
+    - my key goes here
+
+boxes:
+  - hostname: example01
+    ipaddress: 10.10.10.2
+    netmask: 28
+    gateway: 10.10.10.1
+    metadata:
+      role: cluster
+      kubernetes: true
+      dc: dev
+  - hostname: example02
+    ipaddress: 10.10.10.3
+    netmask: 28
+    gateway: 10.10.10.1
+    metadata:
+      role: cluster
+      kubernetes: true
+      dc: dev
+  - hostname: example03
+    ipaddress: 10.10.10.4
+    netmask: 28
+    gateway: 10.10.10.1
+    metadata:
+      role: cluster
+      kubernetes: true
+      dc: dev

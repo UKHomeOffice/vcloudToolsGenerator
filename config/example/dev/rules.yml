@@ -1,0 +1,9 @@
+# proposed format for generating edge rules
+
+rules:
+    rule: snat:network1,network2,network3
+    rule: dnat:192.168.1.1:22->PRENODE01:22
+    rule: firewall:dev@:ETCD<->MIRROR:ETCD
+    rule: vpn:network1, network2, network3
+    rule: external:192.168.1.1:22->PRENODE01:sharedkeyhere
+

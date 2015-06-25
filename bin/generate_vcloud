@@ -1,0 +1,197 @@
+#!/usr/bin/env ruby
+
+require 'methadone'
+require 'time'
+require 'erb'
+require 'highline/import'
+require 'json'
+require 'yaml'
+require 'FileUtils'
+require 'ipaddr'
+
+ft = HighLine::ColorScheme.new do |cs|
+    cs[:headline] = [ :bold, :red, :on_black ]
+    cs[:menu_item] = [ :green ]
+end
+
+HighLine.color_scheme = ft
+
+include Methadone::Main
+include Methadone::CLILogging
+
+main do |func|
+
+    if options[:password].empty?
+        puts
+        options[:password] = ask("<%= color('Please set a Password: ', :headline)%>") { |q| q.echo = "x" }
+        puts
+    end
+    password = options[:password]
+
+    case func
+    when 'vapp'
+        generateVapps(options[:siteLocation])
+    when 'network'
+        generateNetworks(options[:siteLocation])
+    when 'upload'
+        isoPath = filePath(options[:siteLocation],'config') + '/generated/cloudconfigs/iso/'
+        Dir.glob("#{isoPath}/*.iso").sort.each do |file| 
+          uploadImage(file, options[:fogDefinition], template=false, iso=true, password) 
+        end 
+    when 'config' 
+        generateCloudConfig(options[:siteLocation])
+    when 'vcloud'
+        runVcloudTools(options[:siteLocation], options[:fogDefinition], password)
+    when 'all'
+        generateVapps(options[:siteLocation]) 
+        generateNetworks(options[:siteLocation])
+        generateCloudConfig(options[:siteLocation])
+        isoPath = filePath(options[:siteLocation],'config') + '/generated/cloudconfigs/iso/'
+        Dir.glob("#{isoPath}/*.iso").sort.each do |file|
+          uploadImage(file, options[:fogDefinition], template=false, iso=true, password)
+        end
+        runVcloudTools(options[:siteLocation], options[:fogDefinition], password)
+    else 
+        puts "example: ./generate_vcloud vapp -s commons/dev"
+    end 
+end
+
+version     '0.0.1'
+description 'Generate Vcloud data and stuff'
+arg :func, :required, "vapp", "network", "upload"
+
+on("-s project/environment","--site","point to site location in config dir; ex: commons/prod") do |siteLocation|
+  options[:siteLocation] = siteLocation
+end
+
+on("-f fog","--fog","point to definition in fog file") do |fogDefinition|
+    fogFile = YAML::load(File.open(ENV['HOME']+'/.fog'))
+    options[:password] = fogFile[fogDefinition]['vcloud_director_password']
+    options[:fogDefinition] = fogDefinition
+end
+
+on("-p password","--password","password for those who dont keep it in fogfile") do |password|
+  options[:password] = password.empty? ? options[:password] : password
+end
+
+def filePath(siteLocation, type)
+    if (type == 'bin')
+        return File.dirname(__FILE__) + "/" 
+    end
+    if (type == 'templates')
+       return File.dirname(__FILE__) + "/templates"
+    end
+    return File.dirname(__FILE__) + "/" + type + '/' + siteLocation + "/"
+end
+
+#helper to generate vapps from boxes definition.  requires specs and networks file
+def generateVapps(siteLocation)
+    clusterFile = filePath(siteLocation,'config') + "cluster.yml"
+    clusterYaml = YAML::load(File.open(clusterFile))
+
+    clusterYaml['boxes'].each { 
+        |x|
+        
+        specFile = filePath(siteLocation,'config') + "spec.yml"
+        specYaml = YAML::load(File.open(specFile))
+        networkFile = filePath(siteLocation,'config') + "network.yml"
+        networkYaml = YAML::load(File.open(networkFile))
+
+        output = {'vapps' => specYaml[x['metadata']['role']]}
+        output['vapps']['vm']['network_connections'] = [{"name" => networkYaml[x['gateway']+"/"+x['netmask'].to_s]['name']}]
+        output['vapps']['vdc_name'] =  networkYaml[x['gateway']+"/"+x['netmask'].to_s]['vdc']
+        output['vapps']['vm']['cdrom'] = x['hostname'] + "." + siteLocation.split("//").last + ".iso"
+      
+        vappLocation = filePath(siteLocation, 'projects') + networkYaml[x['gateway']+"/"+x['netmask'].to_s]['vdc']
+        vappFile = vappLocation + "/vapps/" + x['hostname'] + ".yml"
+        
+        FileUtils.mkdir_p File.dirname(vappFile)
+        File.open(vappFile, 'w') { |file| file.write(YAML::dump(output)) }
+        puts YAML::dump(output)
+    }
+end
+
+#generate vcloudtools network def from our definition
+def generateNetworks(siteLocation)
+    networkFile = filePath(siteLocation, 'config') + "network.yml"
+    networkYaml = YAML::load(File.open(networkFile))
+    networkYaml.each do |key, value| 
+        clusterFile = filePath(siteLocation, 'config') + "cluster.yml"
+        clusterYaml = YAML::load(File.open(clusterFile))
+        # want to unhardcode these if they're available in the networks file.
+        output = {'org_vdc_networks' => [{'name' => value['name'], 
+                                         'description' => value['name'],
+                                         'vdc_name' => value['vdc'],
+                                         'fence_mode' => 'natRouted',
+                                         'edge_gateway' => value['edge'],
+                                         'is_shared' => false,
+                                         'gateway' => key.split('/')[0].to_s, 
+                                         'netmask' => IPAddr.new('255.255.255.255').mask(key.split('/')[1]).to_s,
+                                         'dns_suffix' => clusterYaml['scope']['domain'],
+                                         'dns1' => "8.8.8.8",
+                                         'dns2' => "8.8.4.4",
+                                         'ip_ranges' => value['range']
+                                        }] 
+                 }
+        networkLocation = filePath(siteLocation, 'projects') + value['vdc']
+        networkFile = networkLocation + "/org_networks/" + value['name'] + ".yml"
+        FileUtils.mkdir_p File.dirname(networkFile)
+        File.open(networkFile, 'w') { |file| file.write(YAML::dump(output)) }
+        puts YAML::dump(output)
+    end
+end
+
+#helper to upload media to vcloud director
+def uploadImage(file, fogDef, template=false, iso=true, password)
+    if File.exist?(ENV['HOME']+'/.fog')
+        fogFile = YAML::load(File.open(ENV['HOME']+'/.fog'))
+
+        username = fogFile[fogDef]['vcloud_director_username'].split("@").first
+        api = fogFile[fogDef]['vcloud_director_host']
+        org = fogFile[fogDef]['vcloud_director_username'].split("@").last
+        name = File.basename(file) 
+        catalog = 'CoreOS'
+
+        uploadUrl = "vcloud://#{username}:#{password}@#{api}?org=#{org}&media=#{name}&catalog=#{catalog}"
+        cmd = "ovftool -o -st=ISO --vCloudTemplate=#{template} #{file} \"#{uploadUrl}\""
+        system(cmd)
+    else    
+        puts ENV['HOME']+"/.fog file doesn't exist"   
+    end
+end
+
+def generateCloudConfig(siteLocation)
+    cmd = filePath(siteLocation, 'bin')+"/cluster_conf -p " + filePath(siteLocation, 'config') + " cl -i -t " + filePath(siteLocation, 'templates') + '/' + 'cloudinit.coreos.erb'
+    puts cmd
+    system(cmd)
+end
+
+def runVcloudTools(siteLocation,fogDef,password)
+    fogFile = YAML::load(File.open(ENV['HOME']+'/.fog'))
+    if password.empty?
+        login = "eval $(FOG_CREDENTIAL=#{fogDef} vcloud-login)"
+    else
+        login = "printenv #{password} | eval $(FOG_CREDENTIAL=#{fogDef} vcloud-login)"
+    end
+    system(login)
+
+    Dir.glob(filePath(siteLocation, 'projects')+"*/org_networks/*").sort.each do |file|
+        netLaunch = "FOG_CREDENTIAL=#{fogDef} vcloud-net-launch \"" + file +'"'
+        puts netLaunch
+        system netLaunch
+    end
+    
+    Dir.glob(filePath(siteLocation, 'projects') +"*/network_edge/*").sort.each do |file|
+        edgeConfigre = "FOG_CREDENTIAL=#{fogDef}  vcloud-edge-configure \"" + file +'"'
+        puts edgeConfigre
+        system(edgeConfigre)
+    end
+
+    Dir.glob(filePath(siteLocation, 'projects') +"*/vapps/*").sort.each do |file|
+        vappStart = "FOG_CREDENTIAL=#{fogDef}  vcloud-launch \"" + file +'"'
+        puts vappStart
+        system (vappStart)
+    end
+ 
+end
+go!

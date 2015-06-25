@@ -1,0 +1,8 @@
+cluster:
+    catalog_name: 'CoreOS'
+    vapp_template_name: 'CoreOS-695.0.0'
+    vm:
+        hardware_config:
+            memory: 4096
+            cpu: 2
+    storage_profile: 'BASIC-Any'
