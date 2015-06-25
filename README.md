@@ -3,11 +3,11 @@ An attempt at abstracting the vcloud-tools format to quickly generate and launch
 
 what works.
 ==
-*vapps
-*networks
+=vapps
+=networks
 
 what doesn't work
 ==
-*vpn
-*edge
-*
+=vpn
+=edge
+
